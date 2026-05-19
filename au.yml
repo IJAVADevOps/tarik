@@ -1,0 +1,166 @@
+---
+- name: Set Fact
+  ansible.builtin.set_fact:
+    package: auditbeat-{{ version }}-x86_64.rpm
+    conf_rsyslog: create_conf_rsyslog.bash
+    user_ansible: ansible
+    exec_tcpdump: tcpdump.bash
+    file_auditbeat_conf_version_sup_6: auditbeat_version_sup_6.j2
+
+- name: Show ANSIBLE_HOST
+  ansible.builtin.debug:
+    msg: "ANSIBLE_HOST = {{ ansible_host }}"
+
+- name: Facts for collectors
+  ansible.builtin.set_fact:
+    collecteur_siem: "{{ collecteur_siem }}"
+    collecteur_siem_auditbeat: "{{ collecteur_siem_auditbeat }}"
+    port_collecteur_siem: "{{ port_collecteur_siem }}"
+
+- name: Show COLLECTEUR_SIEM
+  ansible.builtin.debug:
+    msg: "collecteur_siem = {{ collecteur_siem }}"
+
+# - name: Set Fact for conf_rsyslog
+#   ansible.builtin.set_fact:
+#     file_conf_rsyslog: linux-auditbeat.conf
+#   when: "ansible_distribution == 'RedHat' and ansible_distribution_major_version == '7'"
+
+- name: Set Fact for conf_rsyslog (version 8)
+  ansible.builtin.set_fact:
+    file_conf_rsyslog: 8-linux_auditbeat.conf
+  # when: "ansible_distribution == 'RedHat' and ansible_distribution_major_version > '7'"
+
+- name: Show FILE_CONF_RSYLOG
+  ansible.builtin.debug:
+    msg: "FILE_CONF_RSYLOG = {{ file_conf_rsyslog }}"
+
+- name: Show USER_ANSIBLE
+  ansible.builtin.debug:
+    msg: "USER_ANSIBLE = {{ user_ansible }}"
+
+- name: Show ansible_distribution
+  ansible.builtin.debug:
+    msg: "{{ ansible_distribution }}"
+
+- name: Show ansible_distribution_major_version
+  ansible.builtin.debug:
+    msg: "{{ ansible_distribution_major_version }}"
+
+- name: Create directory for auditbeat
+  ansible.builtin.file:
+    path: /opt/auditbeat
+    state: directory
+    mode: '0755'
+
+- name: Install auditbeat RPM using yum
+  ansible.builtin.yum:
+    name: "https://{{ nexus_host }}/repository/auditbeat/auditbeat-{{ version }}-x86_64.rpm"
+    state: present
+    disable_gpg_check: true
+
+- name: Check if auditbeat package is installed
+  ansible.builtin.yum:
+    name: "{{ package }}"
+    state: present
+  register: package_installed
+  failed_when: false
+  changed_when: package_installed.changed
+
+- name: Ensure Auditbeat output directory exists
+  ansible.builtin.file:
+    path: "{{ auditbeat_install_output_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Configure auditbeat version template
+  ansible.builtin.template:
+    src: "auditbeat_version_sup_6.j2"
+    dest: "/etc/auditbeat/auditbeat.yml"
+    owner: root
+    group: root
+    mode: "0755"
+  when: "ansible_distribution == 'RedHat' and ansible_distribution_major_version > '6'"
+
+- name: Restart service auditd
+  ansible.builtin.service:
+    name: auditd
+    state: restarted
+  failed_when: false
+
+- name: Ensure rsyslog is installed
+  ansible.builtin.yum:
+    name: rsyslog
+    state: present
+
+- name: Ensure rsyslog is enabled and started
+  ansible.builtin.service:
+    name: rsyslog
+    state: started
+    enabled: true
+
+# - name: Copy configuration script for rsyslog
+#   ansible.builtin.template:
+#     src: "roles/auditbeat_install/templates/create_conf_rsyslog.bash.j2"
+#     dest: /opt/auditbeat/create_conf_rsyslog.bash
+#     backup: true
+#     mode: "0755"
+
+# - name: Execute rsyslog configuration
+#   ansible.builtin.command:
+#     cmd: "/bin/bash /opt/auditbeat/create_conf_rsyslog.bash '{{ collecteur_siem }}:{{ port_collecteur_siem }}'"
+#   register: rsyslog_conf
+#   changed_when: rsyslog_conf.rc != 0
+
+- name: Check rsyslog status
+  ansible.builtin.shell:
+    cmd: "ps -ef | grep -v grep | grep -c rsyslog"
+  args:
+    warn: false
+  ignore_errors: true
+  register: syslog_status
+  changed_when: syslog_status.rc != 0
+
+- name: Stop rsyslog service
+  ansible.builtin.service:
+    name: rsyslog
+    state: stopped
+
+- name: Configure rsyslog template
+  ansible.builtin.template:
+    src: "roles/auditbeat_install/templates/{{ file_conf_rsyslog }}.j2"
+    dest: /etc/rsyslog.d/{{ file_conf_rsyslog }}
+    mode: "0755"
+
+- name: Comment legacy local6 forwarding lines in /etc/rsyslog.conf
+  ansible.builtin.replace:
+    path: /etc/rsyslog.conf
+    regexp: '^(local6\.info\s+@.*)$'
+    replace: '#\1'
+
+- name: Exclure local6 de /var/log/messages
+  ansible.builtin.lineinfile:
+    path: /etc/rsyslog.conf
+    regexp: '^\*\.info;mail\.none;authpriv\.none;cron\.none\s+/var/log/messages$'
+    line: '*.info;mail.none;authpriv.none;cron.none;local6.none    /var/log/messages'
+    backup: true
+
+
+- name: Restart rsyslog service
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+
+- name: Copy tcpdump script
+  ansible.builtin.copy:
+    src: "../templates/tcpdump.bash"
+    dest: /opt/auditbeat/tcpdump.bash
+    mode: "0755"
+
+- name: Retart service auditbeat
+  ansible.builtin.service:
+    name: auditbeat
+    state: restarted
+  failed_when: false

@@ -1,0 +1,55 @@
+---
+- name: Check Auditbeat installation and configuration
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    auditbeat_binary_path: "/usr/bin/auditbeat"
+    auditbeat_config_file: "/etc/auditbeat/auditbeat.yml"
+    auditbeat_service_name: "auditbeat.service"
+
+  tasks:
+
+    - name: Check if Auditbeat binary exists
+      ansible.builtin.stat:
+        path: "{{ auditbeat_binary_path }}"
+      register: auditbeat_binary
+
+    - name: Check if Auditbeat config file exists
+      ansible.builtin.stat:
+        path: "{{ auditbeat_config_file }}"
+      register: auditbeat_config
+
+    - name: Collect service facts
+      ansible.builtin.service_facts:
+
+    - name: Display Auditbeat status
+      ansible.builtin.debug:
+        msg:
+          - "Binary exists: {{ auditbeat_binary.stat.exists }}"
+          - "Config exists: {{ auditbeat_config.stat.exists }}"
+          - "Service exists: {{ auditbeat_service_name in ansible_facts.services }}"
+          - "Service state: {{ ansible_facts.services[auditbeat_service_name].state | default('not found') }}"
+
+    - name: Fail if Auditbeat binary is missing
+      ansible.builtin.fail:
+        msg: "Auditbeat binary is missing on this VM"
+      when: not auditbeat_binary.stat.exists
+
+    - name: Fail if Auditbeat config file is missing
+      ansible.builtin.fail:
+        msg: "Auditbeat configuration file is missing on this VM"
+      when: not auditbeat_config.stat.exists
+
+    - name: Fail if Auditbeat service does not exist
+      ansible.builtin.fail:
+        msg: "Auditbeat service is missing on this VM"
+      when: auditbeat_service_name not in ansible_facts.services
+
+    - name: Fail if Auditbeat service is not running
+      ansible.builtin.fail:
+        msg: "Auditbeat service is not running"
+      when:
+        - auditbeat_service_name in ansible_facts.services
+        - ansible_facts.services[auditbeat_service_name].state != "running"

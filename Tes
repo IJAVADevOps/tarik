@@ -1,0 +1,135 @@
+---
+- name: Check Auditbeat installation and configuration
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    auditbeat_conf: /etc/auditbeat/auditbeat.yml
+    rsyslog_conf: /etc/rsyslog.d/8-linux_auditbeat.conf
+    collecteur_siem: "{{ collecteur_siem }}"
+    port_collecteur_siem: "{{ port_collecteur_siem }}"
+
+  tasks:
+
+    - name: Check if auditbeat package is installed
+      ansible.builtin.shell: |
+        rpm -qa | grep auditbeat
+      register: auditbeat_pkg
+      changed_when: false
+      failed_when: auditbeat_pkg.rc != 0
+
+    - name: Show installed package
+      ansible.builtin.debug:
+        msg: "{{ auditbeat_pkg.stdout }}"
+
+    - name: Check auditbeat service status
+      ansible.builtin.systemd:
+        name: auditbeat
+      register: auditbeat_service
+
+    - name: Display auditbeat service status
+      ansible.builtin.debug:
+        msg:
+          - "State: {{ auditbeat_service.status.ActiveState }}"
+          - "Enabled: {{ auditbeat_service.status.UnitFileState }}"
+
+    - name: Fail if auditbeat service is not running
+      ansible.builtin.fail:
+        msg: "Auditbeat service is NOT running"
+      when: auditbeat_service.status.ActiveState != "active"
+
+    - name: Check auditbeat configuration file exists
+      ansible.builtin.stat:
+        path: "{{ auditbeat_conf }}"
+      register: auditbeat_conf_file
+
+    - name: Fail if auditbeat config file does not exist
+      ansible.builtin.fail:
+        msg: "Auditbeat config file is missing"
+      when: not auditbeat_conf_file.stat.exists
+
+    - name: Validate auditbeat configuration
+      ansible.builtin.command:
+        cmd: auditbeat test config -c {{ auditbeat_conf }}
+      register: auditbeat_config_test
+      changed_when: false
+      failed_when: auditbeat_config_test.rc != 0
+
+    - name: Show config validation result
+      ansible.builtin.debug:
+        var: auditbeat_config_test.stdout_lines
+
+    - name: Test connection to SIEM collector
+      ansible.builtin.wait_for:
+        host: "{{ collecteur_siem }}"
+        port: "{{ port_collecteur_siem }}"
+        timeout: 5
+      register: siem_connectivity
+
+    - name: Display SIEM connectivity result
+      ansible.builtin.debug:
+        msg: "Connection to {{ collecteur_siem }}:{{ port_collecteur_siem }} OK"
+
+    - name: Check rsyslog service status
+      ansible.builtin.systemd:
+        name: rsyslog
+      register: rsyslog_service
+
+    - name: Display rsyslog status
+      ansible.builtin.debug:
+        msg:
+          - "State: {{ rsyslog_service.status.ActiveState }}"
+          - "Enabled: {{ rsyslog_service.status.UnitFileState }}"
+
+    - name: Fail if rsyslog service is not running
+      ansible.builtin.fail:
+        msg: "Rsyslog service is NOT running"
+      when: rsyslog_service.status.ActiveState != "active"
+
+    - name: Check rsyslog configuration file exists
+      ansible.builtin.stat:
+        path: "{{ rsyslog_conf }}"
+      register: rsyslog_conf_file
+
+    - name: Fail if rsyslog config file is missing
+      ansible.builtin.fail:
+        msg: "Rsyslog configuration file is missing"
+      when: not rsyslog_conf_file.stat.exists
+
+    - name: Check auditbeat process
+      ansible.builtin.shell: |
+        ps -ef | grep auditbeat | grep -v grep
+      register: auditbeat_process
+      changed_when: false
+      failed_when: auditbeat_process.rc != 0
+
+    - name: Show auditbeat process
+      ansible.builtin.debug:
+        var: auditbeat_process.stdout_lines
+
+    - name: Check recent auditbeat logs
+      ansible.builtin.shell: |
+        journalctl -u auditbeat -n 20 --no-pager
+      register: auditbeat_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Display recent auditbeat logs
+      ansible.builtin.debug:
+        var: auditbeat_logs.stdout_lines
+
+    - name: Verify auditbeat output test
+      ansible.builtin.command:
+        cmd: auditbeat test output -c {{ auditbeat_conf }}
+      register: auditbeat_output_test
+      changed_when: false
+      failed_when: auditbeat_output_test.rc != 0
+
+    - name: Show output test result
+      ansible.builtin.debug:
+        var: auditbeat_output_test.stdout_lines
+
+    - name: SUCCESS MESSAGE
+      ansible.builtin.debug:
+        msg: "Auditbeat installation and configuration are VALID"
